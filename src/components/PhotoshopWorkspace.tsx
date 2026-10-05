@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { CanvasViewport } from './CanvasViewport';
 import { RetouchPanel } from './RetouchPanel';
-import { RetouchSettings, SampleImage } from '../types/retouch';
+import { RetouchSettings, SampleImage, MaskingState } from '../types/retouch';
 import { analyzeSkinToneMetrics } from '../utils/canvasFilters';
 
 interface PhotoshopWorkspaceProps {
@@ -29,12 +29,17 @@ interface PhotoshopWorkspaceProps {
   onSettingsChange: (settings: RetouchSettings) => void;
   sampleImages: SampleImage[];
   selectedSampleId: string;
+  maskingState?: MaskingState;
+  onMaskingStateChange?: (state: MaskingState) => void;
+  onDetectAllMasks?: () => void;
+  isDetectingMasks?: boolean;
   onSelectSample: (id: string) => void;
   onCustomImageUploaded: (url: string) => void;
   onOpenScripts: (scriptId?: string) => void;
   onOpenAnalysis: () => void;
   onOpenBatch?: () => void;
   onAutoSharpen?: () => void;
+  onOpenAiEdit?: () => void;
   onSampleColorPicked: (info: ReturnType<typeof analyzeSkinToneMetrics>) => void;
 }
 
@@ -43,12 +48,17 @@ export const PhotoshopWorkspace: React.FC<PhotoshopWorkspaceProps> = ({
   onSettingsChange,
   sampleImages,
   selectedSampleId,
+  maskingState,
+  onMaskingStateChange,
+  onDetectAllMasks,
+  isDetectingMasks = false,
   onSelectSample,
   onCustomImageUploaded,
   onOpenScripts,
   onOpenAnalysis,
   onOpenBatch,
   onAutoSharpen,
+  onOpenAiEdit,
   onSampleColorPicked,
 }) => {
   const [activeTool, setActiveTool] = useState<string>('mixer');
@@ -149,6 +159,7 @@ export const PhotoshopWorkspace: React.FC<PhotoshopWorkspaceProps> = ({
             settings={settings}
             sampleImages={sampleImages}
             selectedSampleId={selectedSampleId}
+            maskingState={maskingState}
             onSelectSample={onSelectSample}
             onCustomImageUploaded={onCustomImageUploaded}
             onSampleColorPicked={onSampleColorPicked}
@@ -162,10 +173,15 @@ export const PhotoshopWorkspace: React.FC<PhotoshopWorkspaceProps> = ({
             <RetouchPanel
               settings={settings}
               onChange={onSettingsChange}
+              maskingState={maskingState}
+              onMaskingStateChange={onMaskingStateChange}
+              onDetectAllMasks={onDetectAllMasks}
+              isDetectingMasks={isDetectingMasks}
               onOpenScripts={onOpenScripts}
               onOpenAnalysis={onOpenAnalysis}
               onOpenBatch={onOpenBatch}
               onAutoSharpen={onAutoSharpen}
+              onOpenAiEdit={onOpenAiEdit}
             />
           </div>
 

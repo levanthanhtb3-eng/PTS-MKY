@@ -14,29 +14,40 @@ import {
   Zap,
   RotateCcw
 } from 'lucide-react';
-import { RetouchSettings } from '../types/retouch';
+import { RetouchSettings, MaskingState } from '../types/retouch';
 import { SKIN_TONE_PRESETS, PHOTOSHOP_SCRIPTS } from '../data/photoshopScripts';
+import { MaskingToolsPanel } from './MaskingToolsPanel';
 
 interface RetouchPanelProps {
   settings: RetouchSettings;
   onChange: (settings: RetouchSettings) => void;
+  maskingState?: MaskingState;
+  onMaskingStateChange?: (state: MaskingState) => void;
+  onDetectAllMasks?: () => void;
+  isDetectingMasks?: boolean;
   onOpenScripts: (scriptId?: string) => void;
   onOpenAnalysis: () => void;
   onOpenBatch?: () => void;
   onAutoSharpen?: () => void;
+  onOpenAiEdit?: () => void;
   compactMode?: boolean;
 }
 
 export const RetouchPanel: React.FC<RetouchPanelProps> = ({
   settings,
   onChange,
+  maskingState,
+  onMaskingStateChange,
+  onDetectAllMasks,
+  isDetectingMasks = false,
   onOpenScripts,
   onOpenAnalysis,
   onOpenBatch,
   onAutoSharpen,
+  onOpenAiEdit,
   compactMode = false,
 }) => {
-  const [activeTab, setActiveTab] = useState<'skin' | 'color' | 'details' | 'scripts'>('skin');
+  const [activeTab, setActiveTab] = useState<'skin' | 'color' | 'masking' | 'details' | 'scripts'>('skin');
 
   const updateSetting = <K extends keyof RetouchSettings>(key: K, value: RetouchSettings[K]) => {
     onChange({
@@ -179,10 +190,21 @@ export const RetouchPanel: React.FC<RetouchPanelProps> = ({
       </div>
 
       {/* 1-Click Fast Workflows Banner */}
-      <div className="p-2.5 bg-[#1e1e24] border-b border-neutral-800">
-        <div className="text-[11px] font-medium text-neutral-400 mb-1.5 flex items-center gap-1">
-          <Zap className="w-3 h-3 text-amber-400" />
-          <span>Retouch 1-Chạm Siêu Nhanh</span>
+      <div className="p-2.5 bg-[#1e1e24] border-b border-neutral-800 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-medium text-neutral-400 flex items-center gap-1">
+            <Zap className="w-3 h-3 text-amber-400" />
+            <span>Retouch 1-Chạm Siêu Nhanh</span>
+          </div>
+          {onOpenAiEdit && (
+            <button
+              onClick={onOpenAiEdit}
+              className="text-[10px] font-semibold text-rose-300 hover:text-white flex items-center gap-1 px-1.5 py-0.5 bg-gradient-to-r from-rose-600/30 to-indigo-600/30 border border-rose-500/40 rounded transition-colors"
+            >
+              <Sparkles className="w-2.5 h-2.5 text-amber-300" />
+              <span>Sửa Ảnh Bằng AI</span>
+            </button>
+          )}
         </div>
         <div className="grid grid-cols-3 gap-1.5">
           <button
@@ -229,6 +251,17 @@ export const RetouchPanel: React.FC<RetouchPanelProps> = ({
         >
           <Palette className="w-3 h-3 text-rose-400" />
           <span>Tone Màu</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('masking')}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border-b-2 transition-all ${
+            activeTab === 'masking'
+              ? 'border-indigo-500 text-white bg-[#222228]'
+              : 'border-transparent text-neutral-400 hover:text-neutral-300'
+          } rounded-t`}
+        >
+          <Sparkles className="w-3 h-3 text-amber-400" />
+          <span>Mặt Nạ AI</span>
         </button>
         <button
           onClick={() => setActiveTab('details')}
@@ -676,7 +709,18 @@ export const RetouchPanel: React.FC<RetouchPanelProps> = ({
           </div>
         )}
 
-        {/* ================= TAB 3: DETAILS (EYES & TEETH) ================= */}
+        {/* ================= TAB 3: MASKING TOOLS (AI OBJECT DETECTION) ================= */}
+        {activeTab === 'masking' && maskingState && onMaskingStateChange && onDetectAllMasks && (
+          <MaskingToolsPanel
+            maskingState={maskingState}
+            onMaskingStateChange={onMaskingStateChange}
+            onDetectAllMasks={onDetectAllMasks}
+            isDetecting={isDetectingMasks}
+            onOpenScripts={onOpenScripts}
+          />
+        )}
+
+        {/* ================= TAB 4: DETAILS (EYES & TEETH) ================= */}
         {activeTab === 'details' && (
           <div className="space-y-4">
             <div className="font-semibold text-neutral-200 pb-2 border-b border-neutral-800 flex items-center gap-1.5">

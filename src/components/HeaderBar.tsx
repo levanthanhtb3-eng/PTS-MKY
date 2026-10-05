@@ -11,6 +11,7 @@ import {
   Keyboard,
   Undo2,
   Redo2,
+  Sparkles,
 } from 'lucide-react';
 import { ViewMode } from '../types/retouch';
 
@@ -20,6 +21,7 @@ interface HeaderBarProps {
   onOpenScripts: () => void;
   onOpenAnalysis: () => void;
   onOpenBatch: () => void;
+  onOpenAiEdit?: () => void;
   onOpenShortcuts?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
@@ -35,6 +37,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onOpenScripts,
   onOpenAnalysis,
   onOpenBatch,
+  onOpenAiEdit,
   onOpenShortcuts,
   onUndo,
   onRedo,
@@ -88,13 +91,24 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
       {/* Zone 3: 1-2 primary actions */}
       <div className="flex items-center gap-2">
+        {onOpenAiEdit && (
+          <button
+            onClick={onOpenAiEdit}
+            title="Sửa chữa và tạo ảnh chân dung bằng AI Gemini 3.1 Flash (Phím G)"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-rose-600 hover:from-indigo-500 hover:to-rose-500 rounded-md shadow-md transition-all whitespace-nowrap"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Sửa Ảnh Bằng AI</span>
+          </button>
+        )}
+
         <button
           onClick={onOpenBatch}
           title="Áp dụng retouch và tone màu cho nhiều ảnh cùng lúc"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-md shadow-sm transition-colors whitespace-nowrap"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded-md shadow-sm transition-colors whitespace-nowrap"
         >
-          <Layers className="w-3.5 h-3.5" />
-          <span>Xử Lý Hàng Loạt (Batch)</span>
+          <Layers className="w-3.5 h-3.5 text-indigo-400" />
+          <span>Hàng Loạt (Batch)</span>
         </button>
 
         <button

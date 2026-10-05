@@ -11,13 +11,14 @@ import {
   Check,
   ImageIcon
 } from 'lucide-react';
-import { RetouchSettings, CompareMode, SampleImage } from '../types/retouch';
+import { RetouchSettings, CompareMode, SampleImage, MaskingState } from '../types/retouch';
 import { applyRetouchPipeline, analyzeSkinToneMetrics } from '../utils/canvasFilters';
 
 interface CanvasViewportProps {
   settings: RetouchSettings;
   sampleImages: SampleImage[];
   selectedSampleId: string;
+  maskingState?: MaskingState;
   onSelectSample: (id: string) => void;
   onCustomImageUploaded: (url: string) => void;
   onSampleColorPicked?: (cmykInfo: ReturnType<typeof analyzeSkinToneMetrics>) => void;
@@ -27,6 +28,7 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
   settings,
   sampleImages,
   selectedSampleId,
+  maskingState,
   onSelectSample,
   onCustomImageUploaded,
   onSampleColorPicked,
@@ -94,22 +96,7 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
     };
   }, [activeImage?.url]);
 
-  // Re-run pipeline when settings or image change
-  const renderPipeline = useCallback(() => {
-    if (!sourceCanvasRef.current || !processedCanvasRef.current || !imageLoaded) return;
-    setIsProcessing(true);
-
-    // Apply filters
-    applyRetouchPipeline(sourceCanvasRef.current, processedCanvasRef.current, settings);
-
-    // Render onto display canvas
-    drawDisplayCanvas();
-    setIsProcessing(false);
-  }, [settings, imageLoaded]);
-
-  useEffect(() => {
-    renderPipeline();
-  }, [renderPipeline]);
+  const rafRef = useRef<number | null>(null);
 
   // Draw onto the visible viewport canvas according to compareMode and split position
   const drawDisplayCanvas = useCallback(() => {
@@ -118,8 +105,10 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
     const proc = processedCanvasRef.current;
     if (!display || !src || !proc) return;
 
-    display.width = src.width;
-    display.height = src.height;
+    // Guard against repeated width/height assignment to avoid resetting canvas state and GPU texture reallocation
+    if (display.width !== src.width) display.width = src.width;
+    if (display.height !== src.height) display.height = src.height;
+
     const ctx = display.getContext('2d');
     if (!ctx) return;
 
@@ -159,6 +148,35 @@ export const CanvasViewport: React.FC<CanvasViewportProps> = ({
       ctx.drawImage(proc, 0, 0);
     }
   }, [compareMode, splitPos, isHoldingBefore]);
+
+  // Re-run pipeline when settings, maskingState or image change (throttled with rAF for 60fps responsiveness)
+  const renderPipeline = useCallback(() => {
+    if (!sourceCanvasRef.current || !processedCanvasRef.current || !imageLoaded) return;
+
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+    }
+
+    rafRef.current = requestAnimationFrame(() => {
+      setIsProcessing(true);
+      // Apply filters with localized AI masking
+      applyRetouchPipeline(sourceCanvasRef.current!, processedCanvasRef.current!, settings, maskingState);
+
+      // Render onto display canvas
+      drawDisplayCanvas();
+      setIsProcessing(false);
+      rafRef.current = null;
+    });
+  }, [settings, imageLoaded, maskingState, drawDisplayCanvas]);
+
+  useEffect(() => {
+    renderPipeline();
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, [renderPipeline]);
 
   useEffect(() => {
     drawDisplayCanvas();

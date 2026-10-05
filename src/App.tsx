@@ -12,8 +12,10 @@ import { ScriptModal } from './components/ScriptModal';
 import { SkinAnalysisModal } from './components/SkinAnalysisModal';
 import { BatchProcessModal } from './components/BatchProcessModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
-import { RetouchSettings, SampleImage, ViewMode } from './types/retouch';
+import { AiImageEditModal } from './components/AiImageEditModal';
+import { RetouchSettings, SampleImage, ViewMode, MaskingState } from './types/retouch';
 import { analyzeSkinToneMetrics, detectPortraitClarity } from './utils/canvasFilters';
+import { INITIAL_MASKING_STATE, detectAllPortraitMasks } from './utils/aiMaskDetection';
 import { useRetouchHistory } from './hooks/useRetouchHistory';
 import { Zap } from 'lucide-react';
 
@@ -96,12 +98,17 @@ export default function App() {
   const [selectedSampleId, setSelectedSampleId] = useState<string>('sample_asian');
 
   // Modals state
+  const [isAiModalOpen, setIsAiModalOpen] = useState<boolean>(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
   const [isScriptModalOpen, setIsScriptModalOpen] = useState<boolean>(false);
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState<boolean>(false);
   const [activeScriptId, setActiveScriptId] = useState<string | undefined>(undefined);
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // AI Masking Tools state
+  const [maskingState, setMaskingState] = useState<MaskingState>(INITIAL_MASKING_STATE);
+  const [isDetectingMasks, setIsDetectingMasks] = useState<boolean>(false);
 
   const toastTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -113,6 +120,63 @@ export default function App() {
     toastTimeoutRef.current = setTimeout(() => {
       setToastMessage(null);
     }, 1600);
+  };
+
+  const handleDetectAllMasks = async () => {
+    const canvases = document.querySelectorAll('canvas');
+    if (canvases.length === 0) {
+      showToast('Chưa tìm thấy khung hình để quét mặt nạ.');
+      return;
+    }
+
+    setIsDetectingMasks(true);
+    try {
+      const activeCanvas = canvases[0];
+      const results = await detectAllPortraitMasks(activeCanvas);
+
+      setMaskingState((prev) => ({
+        ...prev,
+        activeMask: 'skin',
+        showOverlay: true,
+        masks: {
+          ...prev.masks,
+          skin: {
+            ...prev.masks.skin,
+            hasSelection: true,
+            coverage: results.skin.coverage,
+            isAiDetected: true,
+            maskBuffer: results.skin.mask,
+            maskWidth: activeCanvas.width,
+            maskHeight: activeCanvas.height,
+          },
+          eyes: {
+            ...prev.masks.eyes,
+            hasSelection: true,
+            coverage: results.eyes.coverage,
+            isAiDetected: true,
+            maskBuffer: results.eyes.mask,
+            maskWidth: activeCanvas.width,
+            maskHeight: activeCanvas.height,
+          },
+          hair: {
+            ...prev.masks.hair,
+            hasSelection: true,
+            coverage: results.hair.coverage,
+            isAiDetected: true,
+            maskBuffer: results.hair.mask,
+            maskWidth: activeCanvas.width,
+            maskHeight: activeCanvas.height,
+          },
+        },
+      }));
+
+      showToast(`⚡ AI đã nhận diện: Da (${results.skin.coverage}%), Mắt (${results.eyes.coverage}%), Tóc (${results.hair.coverage}%) [Phím O xem mặt nạ]`);
+    } catch (err) {
+      console.error(err);
+      showToast('Lỗi khi quét vùng chọn AI.');
+    } finally {
+      setIsDetectingMasks(false);
+    }
   };
 
   const handleUndo = () => {
@@ -128,6 +192,20 @@ export default function App() {
       showToast('Làm lại (Redo) [Ctrl+Shift+Z]');
     }
   };
+
+  const handleApplyAiImage = (newImageUrl: string, name?: string) => {
+    const newImage: SampleImage = {
+      id: `ai_${Date.now()}`,
+      name: name || 'Ảnh AI Retouch',
+      category: 'custom',
+      url: newImageUrl,
+    };
+    setSampleImages((prev) => [newImage, ...prev]);
+    setSelectedSampleId(newImage.id);
+    showToast('⚡ Đã đưa ảnh AI vào Studio Retouch!');
+  };
+
+  const currentSample = sampleImages.find((img) => img.id === selectedSampleId) || sampleImages[0];
 
   const [currentMetrics, setCurrentMetrics] = useState<ReturnType<typeof analyzeSkinToneMetrics>>({
     rgb: { r: 232, g: 182, b: 168 },
@@ -292,7 +370,17 @@ export default function App() {
         return;
       }
 
-      if (key === 'a') {
+      if (key === 'g') {
+        e.preventDefault();
+        setIsAiModalOpen((prev) => !prev);
+      } else if (key === 'o') {
+        e.preventDefault();
+        setMaskingState((prev) => {
+          const next = !prev.showOverlay;
+          showToast(`Lớp phủ Mặt Nạ [O]: ${next ? 'BẬT' : 'TẮT'}`);
+          return { ...prev, showOverlay: next };
+        });
+      } else if (key === 'a') {
         e.preventDefault();
         handleAutoSharpen();
       } else if (key === 'f') {
@@ -381,6 +469,7 @@ export default function App() {
         onOpenScripts={() => handleOpenScripts()}
         onOpenAnalysis={() => setIsAnalysisModalOpen(true)}
         onOpenBatch={() => setIsBatchModalOpen(true)}
+        onOpenAiEdit={() => setIsAiModalOpen(true)}
         onOpenShortcuts={() => setIsShortcutsModalOpen(true)}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -398,11 +487,16 @@ export default function App() {
             onSettingsChange={setSettings}
             sampleImages={sampleImages}
             selectedSampleId={selectedSampleId}
+            maskingState={maskingState}
+            onMaskingStateChange={setMaskingState}
+            onDetectAllMasks={handleDetectAllMasks}
+            isDetectingMasks={isDetectingMasks}
             onSelectSample={setSelectedSampleId}
             onCustomImageUploaded={handleCustomImageUploaded}
             onOpenScripts={handleOpenScripts}
             onOpenAnalysis={() => setIsAnalysisModalOpen(true)}
             onOpenBatch={() => setIsBatchModalOpen(true)}
+            onOpenAiEdit={() => setIsAiModalOpen(true)}
             onAutoSharpen={handleAutoSharpen}
             onSampleColorPicked={handleSampleColorPicked}
           />
@@ -414,6 +508,7 @@ export default function App() {
                 settings={settings}
                 sampleImages={sampleImages}
                 selectedSampleId={selectedSampleId}
+                maskingState={maskingState}
                 onSelectSample={setSelectedSampleId}
                 onCustomImageUploaded={handleCustomImageUploaded}
                 onSampleColorPicked={handleSampleColorPicked}
@@ -423,15 +518,28 @@ export default function App() {
               <RetouchPanel
                 settings={settings}
                 onChange={setSettings}
+                maskingState={maskingState}
+                onMaskingStateChange={setMaskingState}
+                onDetectAllMasks={handleDetectAllMasks}
+                isDetectingMasks={isDetectingMasks}
                 onOpenScripts={handleOpenScripts}
                 onOpenAnalysis={() => setIsAnalysisModalOpen(true)}
                 onOpenBatch={() => setIsBatchModalOpen(true)}
+                onOpenAiEdit={() => setIsAiModalOpen(true)}
                 onAutoSharpen={handleAutoSharpen}
               />
             </div>
           </div>
         )}
       </main>
+
+      {/* AI Image Edit & Create Modal (gemini-3.1-flash-image-preview) */}
+      <AiImageEditModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        currentImageSrc={currentSample?.url}
+        onApplyResultImage={handleApplyAiImage}
+      />
 
       {/* Batch Processing Modal */}
       <BatchProcessModal

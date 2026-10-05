@@ -1,4 +1,13 @@
-import { RetouchSettings } from '../types/retouch';
+import { RetouchSettings, MaskingState } from '../types/retouch';
+
+// Reusable typed array buffer to eliminate GC allocations during slider interaction
+let sharedBlurBuffer: Float32Array | null = null;
+function getSharedBlurBuffer(size: number): Float32Array {
+  if (!sharedBlurBuffer || sharedBlurBuffer.length < size) {
+    sharedBlurBuffer = new Float32Array(size);
+  }
+  return sharedBlurBuffer;
+}
 
 /**
  * Fast box blur approximation for low frequency tone separation
@@ -7,8 +16,8 @@ function fastBoxBlur(src: Uint8ClampedArray, width: number, height: number, radi
   const dst = new Uint8ClampedArray(src.length);
   const r = Math.max(1, Math.min(Math.round(radius), 20));
 
-  // Horizontal blur
-  const temp = new Float32Array(width * height * 4);
+  // Horizontal blur with pooled memory
+  const temp = getSharedBlurBuffer(width * height * 4);
   const div = 2 * r + 1;
 
   for (let y = 0; y < height; y++) {
@@ -75,29 +84,28 @@ function fastBoxBlur(src: Uint8ClampedArray, width: number, height: number, radi
 
 /**
  * Check if a pixel belongs to a typical human skin tone region
+ * Optimized with Euclidean distance squared (avoids Math.sqrt per pixel)
  */
 export function isSkinPixel(r: number, g: number, b: number): number {
-  // Standard Skin Color Segmenter in RGB & YCbCr space
-  // Normalized skin probability (0 to 1)
   if (r < 60 || g < 40 || b < 20) return 0;
   if (r <= g || r <= b) return 0;
   if (r - g < 10) return 0;
 
-  // Ratio check
+  // Quick range check
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   if (max - min < 15) return 0;
 
   // YCbCr approximation
-  const y = 0.299 * r + 0.587 * g + 0.114 * b;
   const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
   const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
 
   if (cb >= 77 && cb <= 135 && cr >= 133 && cr <= 178) {
-    // Distance from ideal skin center (cb ~ 105, cr ~ 152)
-    const dist = Math.sqrt(Math.pow(cb - 105, 2) + Math.pow(cr - 152, 2));
-    const factor = Math.max(0, 1 - dist / 50);
-    return factor;
+    const dCb = cb - 105;
+    const dCr = cr - 152;
+    const distSq = dCb * dCb + dCr * dCr;
+    if (distSq >= 2500) return 0.2;
+    return 1 - distSq * 0.0004; // 1 / 2500 = 0.0004
   }
 
   return 0.2;
@@ -109,7 +117,8 @@ export function isSkinPixel(r: number, g: number, b: number): number {
 export function applyRetouchPipeline(
   sourceCanvas: HTMLCanvasElement,
   targetCanvas: HTMLCanvasElement,
-  settings: RetouchSettings
+  settings: RetouchSettings,
+  maskingState?: MaskingState
 ) {
   const width = sourceCanvas.width;
   const height = sourceCanvas.height;
@@ -181,11 +190,16 @@ export function applyRetouchPipeline(
 
   const centerX = width * 0.5;
   const centerY = height * 0.45;
-  const radiusNorm = Math.sqrt(centerX * centerX + centerY * centerY);
+  const invWidth = 1 / width;
+  const invHeight = 1 / height;
+  const invRadiusNormSq = 1 / (centerX * centerX + centerY * centerY);
+  const vigMul = (settings.vignette / 100) * 0.8;
 
   for (let y = 0; y < height; y++) {
     const rowIdx = y * width;
-    const dy = (y - centerY) / height;
+    const dy = (y - centerY) * invHeight;
+    const dySq = dy * dy;
+    const yDistSq = (y - centerY) * (y - centerY);
 
     for (let x = 0; x < width; x++) {
       const idx = (rowIdx + x) * 4;
@@ -194,7 +208,7 @@ export function applyRetouchPipeline(
       const bOrig = srcPixels[idx + 2];
       const aOrig = srcPixels[idx + 3];
 
-      const dx = (x - centerX) / width;
+      const dx = (x - centerX) * invWidth;
       const skinWeight = isSkinPixel(rOrig, gOrig, bOrig);
 
       let r = rOrig;
@@ -214,9 +228,10 @@ export function applyRetouchPipeline(
 
         // Blemish removal dampens extreme high-frequency spikes
         if (blemishClean > 0) {
-          rHigh = 128 + (rHigh - 128) * (1 - blemishClean * 0.45);
-          gHigh = 128 + (gHigh - 128) * (1 - blemishClean * 0.45);
-          bHigh = 128 + (bHigh - 128) * (1 - blemishClean * 0.45);
+          const factor = 1 - blemishClean * 0.45;
+          rHigh = 128 + (rHigh - 128) * factor;
+          gHigh = 128 + (gHigh - 128) * factor;
+          bHigh = 128 + (bHigh - 128) * factor;
         }
 
         // Linear Light reconstruction: 2 * (High - 128) + BlendedLow
@@ -240,20 +255,22 @@ export function applyRetouchPipeline(
         }
       }
 
-      // C. Dodge & Burn 3D Face Contouring
+      // C. Dodge & Burn 3D Face Contouring (Optimized with distSq check)
       if (dbStrength > 0) {
-        // T-Zone / Center face highlight (Dodge)
-        const distFromCenter = Math.sqrt(dx * dx * 2.5 + dy * dy);
-        if (distFromCenter < 0.35 && skinWeight > 0.2) {
-          const highlightAmount = (1 - distFromCenter / 0.35) * dbDodge;
+        const distSq = dx * dx * 2.5 + dySq;
+        // T-Zone / Center face highlight (Dodge): dist < 0.35 => distSq < 0.1225
+        if (distSq < 0.1225 && skinWeight > 0.2) {
+          const distFromCenter = Math.sqrt(distSq);
+          const highlightAmount = (1 - distFromCenter * 2.8571) * dbDodge;
           r += highlightAmount;
           g += highlightAmount * 0.95;
           b += highlightAmount * 0.9;
         }
 
-        // Contour Cheek / Jaw edges (Burn)
-        if (distFromCenter > 0.28 && distFromCenter < 0.65 && skinWeight > 0.15) {
-          const contourAmount = ((distFromCenter - 0.28) / 0.37) * dbBurn;
+        // Contour Cheek / Jaw edges (Burn): 0.28 < dist < 0.65 => 0.0784 < distSq < 0.4225
+        if (distSq > 0.0784 && distSq < 0.4225 && skinWeight > 0.15) {
+          const distFromCenter = Math.sqrt(distSq);
+          const contourAmount = ((distFromCenter - 0.28) * 2.7027) * dbBurn;
           r -= contourAmount;
           g -= contourAmount * 0.95;
           b -= contourAmount * 0.9;
@@ -261,20 +278,17 @@ export function applyRetouchPipeline(
       }
 
       // D. Teeth Whitening & Eye Catchlight detection
-      // High luminance, low saturation in central facial region
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
       if (teethWhiten > 0 && Math.abs(dx) < 0.25 && dy > 0.05 && dy < 0.3) {
-        // Teeth area: bright but slightly yellow (R > B, G > B)
         if (lum > 110 && lum < 240 && r >= b) {
-          const yellowDelta = Math.max(0, (r + g) / 2 - b);
-          b += yellowDelta * teethWhiten * 0.6; // remove yellow
+          const yellowDelta = Math.max(0, (r + g) * 0.5 - b);
+          b += yellowDelta * teethWhiten * 0.6;
           r += teethWhiten * 10;
           g += teethWhiten * 10;
         }
       }
 
       if (eyeBoost > 0 && Math.abs(dx) < 0.3 && dy > -0.25 && dy < 0.05) {
-        // Eye area
         if (lum > 90) {
           r += eyeBoost * 18;
           g += eyeBoost * 18;
@@ -284,26 +298,23 @@ export function applyRetouchPipeline(
 
       // E. Skin Tone Color Grading & Balance
       if (skinWeight > 0.15) {
-        // Warmth (shifts red/yellow)
         r += warmth * skinWeight;
         b -= warmth * 0.7 * skinWeight;
 
-        // Tint (magenta vs green)
         r += tint * 0.6 * skinWeight;
         g -= tint * 0.5 * skinWeight;
         b += tint * 0.3 * skinWeight;
 
-        // Skin Luminance
         r += skinLum * skinWeight;
         g += skinLum * skinWeight;
         b += skinLum * skinWeight;
 
-        // Skin Saturation
         if (skinSat !== 1.0) {
           const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-          r = gray + (r - gray) * (1 + (skinSat - 1) * skinWeight);
-          g = gray + (g - gray) * (1 + (skinSat - 1) * skinWeight);
-          b = gray + (b - gray) * (1 + (skinSat - 1) * skinWeight);
+          const satMult = 1 + (skinSat - 1) * skinWeight;
+          r = gray + (r - gray) * satMult;
+          g = gray + (g - gray) * satMult;
+          b = gray + (b - gray) * satMult;
         }
       }
 
@@ -317,26 +328,27 @@ export function applyRetouchPipeline(
       // G. Highlight Glow
       if (settings.highlightGlow > 0 && skinWeight > 0.2) {
         if (lum > 140) {
-          const glow = ((lum - 140) / 115) * (settings.highlightGlow / 100) * 22;
+          const glow = ((lum - 140) * 0.008695) * (settings.highlightGlow * 0.01) * 22;
           r += glow;
           g += glow * 0.95;
           b += glow * 0.85;
         }
       }
 
-      // H. Vignette
+      // H. Vignette (Eliminates Math.sqrt and Math.pow)
       if (settings.vignette > 0) {
-        const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2)) / radiusNorm;
-        const vigFactor = 1 - Math.pow(dist, 2) * (settings.vignette / 100) * 0.8;
+        const xDist = x - centerX;
+        const distSqNorm = (xDist * xDist + yDistSq) * invRadiusNormSq;
+        const vigFactor = Math.max(0, 1 - distSqNorm * vigMul);
         r *= vigFactor;
         g *= vigFactor;
         b *= vigFactor;
       }
 
-      // Clamp 0..255
-      out[idx] = Math.max(0, Math.min(255, Math.round(r)));
-      out[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
-      out[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+      // Fast integer clamping (faster than Math.min/Math.max)
+      out[idx] = r < 0 ? 0 : r > 255 ? 255 : (r + 0.5) | 0;
+      out[idx + 1] = g < 0 ? 0 : g > 255 ? 255 : (g + 0.5) | 0;
+      out[idx + 2] = b < 0 ? 0 : b > 255 ? 255 : (b + 0.5) | 0;
       out[idx + 3] = aOrig;
     }
   }
@@ -358,6 +370,157 @@ export function applyRetouchPipeline(
         for (let c = 0; c < 3; c++) {
           const delta = copy[i + c] * 4 - (copy[up + c] + copy[down + c] + copy[left + c] + copy[right + c]);
           out[i + c] = Math.max(0, Math.min(255, copy[i + c] + delta * sharpenAmount));
+        }
+      }
+    }
+  }
+
+  // J. LOCALIZED AI MASK ADJUSTMENTS (Eyes, Skin, Hair)
+  if (maskingState) {
+    const skinMask = maskingState.masks.skin;
+    const eyesMask = maskingState.masks.eyes;
+    const hairMask = maskingState.masks.hair;
+
+    const hasSkin = skinMask.settings.enabled && skinMask.maskBuffer && skinMask.maskBuffer.length === width * height;
+    const hasEyes = eyesMask.settings.enabled && eyesMask.maskBuffer && eyesMask.maskBuffer.length === width * height;
+    const hasHair = hairMask.settings.enabled && hairMask.maskBuffer && hairMask.maskBuffer.length === width * height;
+
+    if (hasSkin || hasEyes || hasHair) {
+      for (let i = 0; i < width * height; i++) {
+        const idx = i * 4;
+        let r = out[idx];
+        let g = out[idx + 1];
+        let b = out[idx + 2];
+
+        // 1. Skin Mask local adjustments
+        if (hasSkin) {
+          const rawWeight = skinMask.maskBuffer![i] / 255;
+          const maskWeight = (skinMask.settings.inverted ? 1 - rawWeight : rawWeight) * (skinMask.settings.opacity / 100);
+          if (maskWeight > 0.04) {
+            const s = skinMask.settings;
+            // Warmth & Tint
+            r += s.skinWarmth * 0.7 * maskWeight;
+            b -= s.skinWarmth * 0.5 * maskWeight;
+            r += s.skinTint * 0.5 * maskWeight;
+            g -= s.skinTint * 0.4 * maskWeight;
+            // Skin Luminance lift
+            r += s.skinLuminance * 0.6 * maskWeight;
+            g += s.skinLuminance * 0.6 * maskWeight;
+            b += s.skinLuminance * 0.6 * maskWeight;
+          }
+        }
+
+        // 2. Eyes Mask local adjustments
+        if (hasEyes) {
+          const rawWeight = eyesMask.maskBuffer![i] / 255;
+          const maskWeight = (eyesMask.settings.inverted ? 1 - rawWeight : rawWeight) * (eyesMask.settings.opacity / 100);
+          if (maskWeight > 0.04) {
+            const s = eyesMask.settings;
+            // Eye Brightness
+            r += s.eyeBrightness * 0.45 * maskWeight;
+            g += s.eyeBrightness * 0.45 * maskWeight;
+            b += s.eyeBrightness * 0.55 * maskWeight;
+
+            // Whiten Sclera: remove yellow tinge
+            if (s.eyeWhiten > 0) {
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              if (lum > 115) {
+                b += (s.eyeWhiten / 100) * 16 * maskWeight;
+                r += (s.eyeWhiten / 100) * 7 * maskWeight;
+                g += (s.eyeWhiten / 100) * 7 * maskWeight;
+              }
+            }
+
+            // Catchlight boost
+            if (s.eyeCatchlight > 0) {
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              if (lum > 125) {
+                const catchlight = ((lum - 125) / 130) * (s.eyeCatchlight / 100) * 42 * maskWeight;
+                r += catchlight;
+                g += catchlight;
+                b += catchlight;
+              }
+            }
+
+            // Iris clarity
+            if (s.eyeClarity > 0) {
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              if (lum < 125) {
+                const contrastFactor = 1 + (s.eyeClarity / 100) * 0.3 * maskWeight;
+                r = (r - 128) * contrastFactor + 128;
+                g = (g - 128) * contrastFactor + 128;
+                b = (b - 128) * contrastFactor + 128;
+              }
+            }
+          }
+        }
+
+        // 3. Hair Mask local adjustments
+        if (hasHair) {
+          const rawWeight = hairMask.maskBuffer![i] / 255;
+          const maskWeight = (hairMask.settings.inverted ? 1 - rawWeight : rawWeight) * (hairMask.settings.opacity / 100);
+          if (maskWeight > 0.04) {
+            const s = hairMask.settings;
+            // Hair Luminance
+            r += s.hairLuminance * 0.6 * maskWeight;
+            g += s.hairLuminance * 0.6 * maskWeight;
+            b += s.hairLuminance * 0.6 * maskWeight;
+
+            // Hair Contrast Depth
+            if (s.hairContrast > 0) {
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              if (lum < 115) {
+                const darkFactor = 1 - (s.hairContrast / 100) * 0.28 * maskWeight;
+                r *= darkFactor;
+                g *= darkFactor;
+                b *= darkFactor;
+              }
+            }
+
+            // Hair Gloss: specular highlight sheen on midtones
+            if (s.hairGloss > 0) {
+              const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+              if (lum > 80 && lum < 225) {
+                const gloss = ((lum - 80) / 145) * (s.hairGloss / 100) * 26 * maskWeight;
+                r += gloss;
+                g += gloss * 0.95;
+                b += gloss * 0.9;
+              }
+            }
+
+            // Hair Tint
+            if (s.hairTint !== 0) {
+              r += s.hairTint * 0.5 * maskWeight;
+              b -= s.hairTint * 0.5 * maskWeight;
+            }
+          }
+        }
+
+        out[idx] = Math.max(0, Math.min(255, Math.round(r)));
+        out[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
+        out[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+      }
+    }
+
+    // 4. Quick Mask Overlay (Ruby Red / Emerald Green) when enabled
+    if (maskingState.showOverlay && maskingState.activeMask) {
+      const activeMaskData = maskingState.masks[maskingState.activeMask];
+      if (activeMaskData?.maskBuffer && activeMaskData.maskBuffer.length === width * height) {
+        const isRuby = maskingState.overlayColor !== 'emerald';
+        const overlayR = isRuby ? 235 : 16;
+        const overlayG = isRuby ? 35 : 185;
+        const overlayB = isRuby ? 65 : 129;
+
+        for (let i = 0; i < width * height; i++) {
+          const rawM = activeMaskData.maskBuffer[i];
+          const mVal = activeMaskData.settings.inverted ? 255 - rawM : rawM;
+          if (mVal > 15) {
+            const alpha = (mVal / 255) * 0.42;
+            const idx = i * 4;
+            out[idx] = Math.round(out[idx] * (1 - alpha) + overlayR * alpha);
+            out[idx + 1] = Math.round(out[idx + 1] * (1 - alpha) + overlayG * alpha);
+            out[idx + 2] = Math.round(out[idx + 2] * (1 - alpha) + overlayB * alpha);
+          }
         }
       }
     }

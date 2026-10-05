@@ -16,6 +16,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
         { key: 'Ctrl + Z', description: 'Hoàn tác thay đổi vừa thực hiện (Undo)' },
         { key: 'Ctrl + Shift + Z', description: 'Làm lại thay đổi vừa hoàn tác (Redo)' },
         { key: 'A', description: 'Tự động phân tích độ nét ảnh & tối ưu High Pass (Auto-Sharpen)' },
+        { key: 'O', description: 'Bật / Tắt lớp phủ Mặt Nạ đỏ Quick Mask (Mask Overlay)' },
         { key: 'F', description: 'Bật / Tắt Tách Tần Số (Frequency Separation)' },
         { key: 'D', description: 'Bật / Tắt Đánh Khối (Dodge & Burn)' },
         { key: 'V', description: 'Bật / Tắt Lớp Hỗ Trợ Soi Da (Visual Aid Solar Curve)' },
@@ -33,6 +34,7 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
     {
       title: 'Mở Bảng Điều Khiển & Công Cụ',
       items: [
+        { key: 'G', description: 'Mở công cụ Sửa & Tạo ảnh bằng AI (Gemini Studio)' },
         { key: 'B', description: 'Mở cửa sổ Xử Lý Hàng Loạt (Batch Process)' },
         { key: 'C', description: 'Mở bảng Phân Tích Màu Da CMYK' },
         { key: 'S', description: 'Mở kho Script Photoshop ExtendScript (.jsx)' },
