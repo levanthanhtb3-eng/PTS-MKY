@@ -1,0 +1,6 @@
+{
+  "name": "Lumina Retouch Pro - Photoshop Panel",
+  "description": "Bảng điều khiển Retouch da chuyên nghiệp và tối ưu màu sắc nhanh chóng cho Photoshop với bộ công cụ Tách tần số, Dodge & Burn, cân màu da và script tự động hóa.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
